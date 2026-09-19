@@ -308,7 +308,7 @@ MetricWatch follows a layered architecture with clear separation of responsibili
                                     │
                                     ▼
                          ┌─────────────────────┐
-                         │      DELIVERY      │
+                         │      DELIVERY       │
                          │                     │
                          │ Email Alerts        │
                          │                     │
