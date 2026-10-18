@@ -1,4 +1,9 @@
+fastapi
+uvicorn[standard]
 pandas
-numpy
 openpyxl
+sqlalchemy
+psycopg2-binary
+alembic
 python-dotenv
+pytest

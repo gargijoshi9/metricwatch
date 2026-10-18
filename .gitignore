@@ -31,6 +31,10 @@ MANIFEST
 venv/
 ENV/
 env/
+.env
+
+# Environment example — keep this one tracked
+!.env.example
 
 # IDE & Editor files
 .idea/
@@ -52,3 +56,9 @@ Thumbs.db
 .pytest_cache/
 .coverage
 htmlcov/
+
+# Uploaded files storage (runtime uploads, not source)
+backend/uploads/
+
+# Logs
+*.log
