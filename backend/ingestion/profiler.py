@@ -3,15 +3,6 @@ import pandas as pd
 
 
 def profile_dataframe(df: pd.DataFrame) -> dict:
-    """
-    Inspect a DataFrame without modifying it.
-
-    Returns a JSON-serializable report containing:
-    - dataset dimensions
-    - column data types and missing-value counts
-    - candidate date and numeric columns
-    - duplicate-row count
-    """
     if df.empty:
         raise ValueError("Cannot profile an empty dataset.")
 
@@ -22,7 +13,6 @@ def profile_dataframe(df: pd.DataFrame) -> dict:
     for column in df.columns:
         series = df[column]
         non_null = series.dropna()
-
         missing_count = int(series.isna().sum())
         non_null_count = int(series.notna().sum())
 
@@ -37,25 +27,42 @@ def profile_dataframe(df: pd.DataFrame) -> dict:
             "unique_count": int(series.nunique(dropna=True)),
         }
 
-        # Identify columns that could contain timestamps.
+        is_date_candidate = False
+        is_numeric_candidate = False
+
         if non_null_count > 0:
-            parsed_dates = pd.to_datetime(
-                non_null, errors="coerce", format="mixed"
+            # Check numeric values FIRST so numbers aren't mistaken
+            # for timestamps by pandas.
+            numeric_values = pd.to_numeric(
+                non_null,
+                errors="coerce",
             )
-            date_ratio = float(parsed_dates.notna().mean())
+            numeric_ratio = float(numeric_values.notna().mean())
 
-            if date_ratio >= 0.8:
-                candidate_date_columns.append(str(column))
-                column_info["date_parse_ratio"] = round(date_ratio, 3)
+            is_numeric_candidate = numeric_ratio >= 0.8
 
-        # Identify columns that could contain numeric values.
-        numeric_values = pd.to_numeric(non_null, errors="coerce")
+            # Already-numeric columns should not be parsed as dates.
+            if not is_numeric_candidate:
+                if pd.api.types.is_datetime64_any_dtype(series):
+                    is_date_candidate = True
+                    date_ratio = 1.0
+                else:
+                    parsed_dates = pd.to_datetime(
+                        non_null,
+                        errors="coerce",
+                        format="mixed",
+                    )
+                    date_ratio = float(parsed_dates.notna().mean())
+                    is_date_candidate = date_ratio >= 0.8
 
-        if (
-            str(column) not in candidate_date_columns
-            and non_null_count > 0
-            and numeric_values.notna().mean() >= 0.8
-        ):
+                if is_date_candidate:
+                    column_info["date_parse_ratio"] = round(
+                        date_ratio, 3
+                    )
+
+        if is_date_candidate:
+            candidate_date_columns.append(str(column))
+        elif is_numeric_candidate:
             candidate_numeric_columns.append(str(column))
 
         columns.append(column_info)
