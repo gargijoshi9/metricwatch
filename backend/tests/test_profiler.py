@@ -24,6 +24,22 @@ def test_profile_identifies_dates_and_numeric_columns():
     assert "Region" not in report["candidate_numeric_columns"]
 
 
+def test_profile_handles_datetime64_and_boolean_types():
+    df = pd.DataFrame({
+        "timestamp": pd.to_datetime(["2026-10-01", "2026-10-02"]),
+        "is_active": [True, False],
+        "score": [98.5, 87.0],
+    })
+
+    report = profile_dataframe(df)
+
+    assert "timestamp" in report["candidate_date_columns"]
+    assert "timestamp" not in report["candidate_numeric_columns"]
+    assert "is_active" not in report["candidate_numeric_columns"]
+    assert "is_active" not in report["candidate_date_columns"]
+    assert "score" in report["candidate_numeric_columns"]
+
+
 def test_profile_counts_missing_and_duplicate_rows():
     df = pd.DataFrame({
         "date": ["2026-10-01", "2026-10-01", None],

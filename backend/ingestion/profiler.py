@@ -31,21 +31,23 @@ def profile_dataframe(df: pd.DataFrame) -> dict:
         is_numeric_candidate = False
 
         if non_null_count > 0:
-            # Check numeric values FIRST so numbers aren't mistaken
-            # for timestamps by pandas.
-            numeric_values = pd.to_numeric(
-                non_null,
-                errors="coerce",
-            )
-            numeric_ratio = float(numeric_values.notna().mean())
+            if pd.api.types.is_datetime64_any_dtype(series):
+                is_date_candidate = True
+                date_ratio = 1.0
+                column_info["date_parse_ratio"] = 1.0
+            elif pd.api.types.is_bool_dtype(series):
+                pass
+            elif pd.api.types.is_numeric_dtype(series):
+                is_numeric_candidate = True
+            else:
+                numeric_values = pd.to_numeric(
+                    non_null,
+                    errors="coerce",
+                )
+                numeric_ratio = float(numeric_values.notna().mean())
 
-            is_numeric_candidate = numeric_ratio >= 0.8
-
-            # Already-numeric columns should not be parsed as dates.
-            if not is_numeric_candidate:
-                if pd.api.types.is_datetime64_any_dtype(series):
-                    is_date_candidate = True
-                    date_ratio = 1.0
+                if numeric_ratio >= 0.8:
+                    is_numeric_candidate = True
                 else:
                     parsed_dates = pd.to_datetime(
                         non_null,
@@ -55,10 +57,10 @@ def profile_dataframe(df: pd.DataFrame) -> dict:
                     date_ratio = float(parsed_dates.notna().mean())
                     is_date_candidate = date_ratio >= 0.8
 
-                if is_date_candidate:
-                    column_info["date_parse_ratio"] = round(
-                        date_ratio, 3
-                    )
+                    if is_date_candidate:
+                        column_info["date_parse_ratio"] = round(
+                            date_ratio, 3
+                        )
 
         if is_date_candidate:
             candidate_date_columns.append(str(column))
