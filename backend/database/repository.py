@@ -30,6 +30,11 @@ class DatasetNotFoundError(PersistenceError):
     pass
 
 
+class AnomalyNotFoundError(PersistenceError):
+    """Raised when a requested anomaly is not found in the database."""
+    pass
+
+
 class EntityValidationError(PersistenceError):
     """Raised when data fails entity validation before persistence."""
     pass
@@ -199,6 +204,21 @@ def list_datasets(
         )
     except Exception as err:
         raise PersistenceError(f"Failed to list datasets: {err}") from err
+
+
+def count_datasets(
+    db: Session,
+    status: DatasetStatus | str | None = None,
+) -> int:
+    """Count datasets with optional status filter."""
+    try:
+        query = db.query(Dataset)
+        if status is not None:
+            parsed_status = _parse_enum(DatasetStatus, status)
+            query = query.filter(Dataset.status == parsed_status)
+        return query.count()
+    except Exception as err:
+        raise PersistenceError(f"Failed to count datasets: {err}") from err
 
 
 def update_dataset_status(
@@ -534,6 +554,137 @@ def get_anomalies(
     except Exception as err:
         raise PersistenceError(
             f"Failed to query anomalies for dataset {dataset_id}: {err}"
+        ) from err
+
+
+def get_anomaly(db: Session, anomaly_id: int) -> Anomaly | None:
+    """Retrieve an anomaly by its primary key ID."""
+    try:
+        return db.query(Anomaly).filter(Anomaly.id == anomaly_id).first()
+    except Exception as err:
+        raise PersistenceError(
+            f"Failed to query anomaly with ID {anomaly_id}: {err}"
+        ) from err
+
+
+def update_anomaly(
+    db: Session,
+    anomaly_id: int,
+    severity: Severity | str | None = None,
+    short_explanation: str | None = None,
+    correlated_with: int | None = None,
+    commit: bool = True,
+) -> Anomaly:
+    """
+    Update supported fields of an anomaly.
+    Only severity, short_explanation, and correlated_with are updatable.
+    """
+    anomaly = get_anomaly(db, anomaly_id)
+    if not anomaly:
+        raise AnomalyNotFoundError(f"Anomaly with ID {anomaly_id} was not found.")
+
+    if severity is not None:
+        anomaly.severity = _parse_enum(Severity, severity)
+
+    if short_explanation is not None:
+        anomaly.short_explanation = (
+            str(short_explanation).strip() if short_explanation else None
+        )
+
+    if correlated_with is not None:
+        if correlated_with == anomaly_id:
+            raise EntityValidationError("An anomaly cannot be correlated with itself.")
+        target = get_anomaly(db, correlated_with)
+        if not target:
+            raise EntityValidationError(
+                f"Correlated anomaly with ID {correlated_with} does not exist."
+            )
+        anomaly.correlated_with = correlated_with
+
+    try:
+        if commit:
+            db.commit()
+            db.refresh(anomaly)
+        else:
+            db.flush()
+        return anomaly
+    except Exception as err:
+        db.rollback()
+        raise PersistenceError(
+            f"Failed to update anomaly {anomaly_id}: {err}"
+        ) from err
+
+
+def list_all_anomalies(
+    db: Session,
+    skip: int = 0,
+    limit: int = 50,
+    dataset_id: int | None = None,
+    severity: Severity | str | None = None,
+    direction: Direction | str | None = None,
+    metric_name: str | None = None,
+) -> tuple[list[Anomaly], int]:
+    """Retrieve paginated anomalies across datasets with optional filters."""
+    try:
+        query = db.query(Anomaly)
+        if dataset_id is not None:
+            query = query.filter(Anomaly.dataset_id == dataset_id)
+        if severity is not None:
+            parsed_severity = _parse_enum(Severity, severity)
+            query = query.filter(Anomaly.severity == parsed_severity)
+        if direction is not None:
+            parsed_direction = _parse_enum(Direction, direction)
+            query = query.filter(Anomaly.direction == parsed_direction)
+        if metric_name is not None:
+            query = query.filter(Anomaly.metric_name == str(metric_name).strip())
+
+        total = query.count()
+        items = (
+            query.order_by(Anomaly.record_date.desc(), Anomaly.id.desc())
+            .offset(skip)
+            .limit(limit)
+            .all()
+        )
+        return items, total
+    except Exception as err:
+        raise PersistenceError(f"Failed to list anomalies: {err}") from err
+
+
+def list_data_quality_issues_paginated(
+    db: Session,
+    dataset_id: int,
+    skip: int = 0,
+    limit: int = 50,
+    issue_type: IssueType | str | None = None,
+    severity: Severity | str | None = None,
+) -> tuple[list[DataQualityIssue], int]:
+    """Retrieve paginated data quality issues for a given dataset."""
+    dataset = get_dataset(db, dataset_id)
+    if not dataset:
+        raise DatasetNotFoundError(f"Dataset with ID {dataset_id} was not found.")
+
+    try:
+        query = db.query(DataQualityIssue).filter(
+            DataQualityIssue.dataset_id == dataset_id
+        )
+        if issue_type is not None:
+            parsed_type = _parse_enum(IssueType, issue_type)
+            query = query.filter(DataQualityIssue.issue_type == parsed_type)
+        if severity is not None:
+            parsed_severity = _parse_enum(Severity, severity)
+            query = query.filter(DataQualityIssue.severity == parsed_severity)
+
+        total = query.count()
+        items = (
+            query.order_by(DataQualityIssue.source_row.asc().nulls_last())
+            .offset(skip)
+            .limit(limit)
+            .all()
+        )
+        return items, total
+    except Exception as err:
+        raise PersistenceError(
+            f"Failed to query quality issues for dataset {dataset_id}: {err}"
         ) from err
 
 

@@ -103,11 +103,9 @@ def detect_anomalies(
             "direction": "up" if actual > expected else "down",
             "severity": classify_severity(float(z_score)),
             "detection_method": "zscore",
-
-    
         })
-        return anomalies
-        
+
+    return anomalies
 
 def detect_sustained_drops(
     df: pd.DataFrame,
