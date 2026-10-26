@@ -1,8 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import {
   Activity,
+  CheckCircle,
+  Database,
   Eye,
   Moon,
+  Server,
   Sparkles,
   Sun,
   UploadCloud,
@@ -16,7 +19,18 @@ import {
   SAMPLE_CSV_RAW,
   analyzeData,
   parseCSV,
+  formatMetricName,
+  formatValue,
+  generateCellExplanation,
+  generateMetricExplanation,
+  generateAISynthesis,
 } from './utils/csvAnalyzer'
+import {
+  checkHealth,
+  uploadDataset,
+  listDatasets,
+  getDatasetAnomalies,
+} from './services/api'
 import './App.css'
 
 const THEME_KEY = 'metricwatch-theme'
@@ -50,12 +64,55 @@ export default function App() {
     }
   })
   const [fileName, setFileName] = useState('sample_business_data.csv')
+  const [backendStatus, setBackendStatus] = useState('checking') // 'connected' | 'offline' | 'checking'
+  const [historyList, setHistoryList] = useState(mockHistory)
 
   // Modal inspection state
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [modalFocusedMetric, setModalFocusedMetric] = useState(null)
 
   const progressTimerRef = useRef(null)
+
+  // Check backend connectivity on mount and load past datasets
+  useEffect(() => {
+    async function initBackend() {
+      try {
+        const health = await checkHealth()
+        if (health && health.status === 'healthy') {
+          setBackendStatus('connected')
+          // Fetch real past datasets from PostgreSQL backend
+          try {
+            const datasetsRes = await listDatasets(0, 10)
+            if (datasetsRes && datasetsRes.items && datasetsRes.items.length > 0) {
+              const liveHistory = datasetsRes.items.map((d) => ({
+                id: `db-${d.id}`,
+                datasetId: d.id,
+                file: d.filename,
+                date: d.uploaded_at ? new Date(d.uploaded_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : 'Recent',
+                results: [
+                  {
+                    metric: 'Detected Anomalies',
+                    value: `${d.anomaly_count}`,
+                    change: d.anomaly_count > 0 ? d.anomaly_count : 0,
+                    severity: d.anomaly_count > 2 ? 'high' : d.anomaly_count > 0 ? 'medium' : 'low',
+                    explanation: `Persisted in PostgreSQL (${d.row_count || 0} rows, ${d.quality_issue_count || 0} data quality alerts).`,
+                  },
+                ],
+              }))
+              setHistoryList(liveHistory)
+            }
+          } catch (e) {
+            console.warn('Could not load historical datasets from API:', e)
+          }
+        } else {
+          setBackendStatus('offline')
+        }
+      } catch {
+        setBackendStatus('offline')
+      }
+    }
+    initBackend()
+  }, [])
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', theme === 'dark')
@@ -126,46 +183,85 @@ export default function App() {
     setAnalysisStatus('idle')
   }
 
-  // Action: Trigger Analysis with animated multi-step progress
-  function handleRunAnalysis() {
+  // Action: Trigger Analysis with live FastAPI Backend & fallback
+  async function handleRunAnalysis() {
     if (!fileContent && !file) {
       handleLoadSampleData()
       return
     }
 
     setAnalysisStatus('analyzing')
-    setAnalysisProgress({ step: 0, percent: 15 })
+    setAnalysisProgress({ step: 0, percent: 20 })
 
-    let currentStep = 0
-    let currentPct = 15
+    const activeFile = file || new File([new Blob([fileContent], { type: 'text/csv' })], fileName || 'uploaded.csv', { type: 'text/csv' })
 
-    progressTimerRef.current = setInterval(() => {
-      currentPct += 18
-      if (currentPct > 35 && currentStep === 0) currentStep = 1
-      if (currentPct > 65 && currentStep === 1) currentStep = 2
-      if (currentPct > 85 && currentStep === 2) currentStep = 3
+    // Step 1: Start uploading to backend
+    setAnalysisProgress({ step: 1, percent: 45 })
 
-      if (currentPct >= 100) {
-        clearInterval(progressTimerRef.current)
-        setAnalysisProgress({ step: 3, percent: 100 })
+    let backendResult = null
+    let backendAnomalies = []
+    let backendSuccess = false
 
+    try {
+      const uploadResp = await uploadDataset(activeFile)
+      backendResult = uploadResp
+      backendSuccess = true
+      setBackendStatus('connected')
+
+      setAnalysisProgress({ step: 2, percent: 75 })
+
+      // Fetch persisted anomaly records from the backend database
+      if (uploadResp.dataset?.id) {
         try {
-          const rawToParse = fileContent || SAMPLE_CSV_RAW
-          const { headers, rows } = parseCSV(rawToParse)
-          const analyzed = analyzeData(rows, headers, sensitivity)
-          setAnalysisData(analyzed)
-          setAnalysisStatus('done')
-          setTimeout(() => {
-            setCurrentPage('results')
-          }, 300)
-        } catch (err) {
-          console.error('Analysis error:', err)
-          setAnalysisStatus('idle')
+          const anomResp = await getDatasetAnomalies(uploadResp.dataset.id, { limit: 100 })
+          backendAnomalies = anomResp.items || []
+        } catch (fetchErr) {
+          console.warn('Could not fetch anomalies list from backend:', fetchErr)
         }
-      } else {
-        setAnalysisProgress({ step: currentStep, percent: Math.min(96, currentPct) })
       }
-    }, 280)
+    } catch (apiErr) {
+      console.warn('Backend API upload failed or unreachable, using client analyzer:', apiErr)
+      setBackendStatus('offline')
+    }
+
+    setAnalysisProgress({ step: 3, percent: 90 })
+
+    // Compute client-side inspection metrics (or augment backend response)
+    try {
+      const rawToParse = fileContent || SAMPLE_CSV_RAW
+      const { headers, rows } = parseCSV(rawToParse)
+      const analyzed = analyzeData(rows, headers, sensitivity)
+
+      // If backend detected anomalies, merge backend IDs and server attributes
+      if (backendSuccess && backendResult) {
+        analyzed.meta.backendDatasetId = backendResult.dataset?.id
+        analyzed.meta.persistedInDb = true
+        analyzed.meta.databaseStatus = backendResult.dataset?.status || 'completed'
+        analyzed.meta.backendQualityIssueCount = backendResult.quality_issue_count
+
+        // Update past snapshots list with the new run
+        setHistoryList((prev) => [
+          {
+            id: `db-${backendResult.dataset.id}`,
+            datasetId: backendResult.dataset.id,
+            file: backendResult.dataset.filename,
+            date: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
+            results: analyzed.results,
+          },
+          ...prev,
+        ])
+      }
+
+      setAnalysisData(analyzed)
+      setAnalysisProgress({ step: 3, percent: 100 })
+      setAnalysisStatus('done')
+      setTimeout(() => {
+        setCurrentPage('results')
+      }, 300)
+    } catch (err) {
+      console.error('Analysis error:', err)
+      setAnalysisStatus('idle')
+    }
   }
 
   // Open File Modal focused on specific metric
@@ -268,8 +364,40 @@ export default function App() {
             )}
           </nav>
 
-          {/* Right: Theme Toggle */}
-          <div className="flex items-center gap-2">
+          {/* Right: Backend Status & Theme Toggle */}
+          <div className="flex items-center gap-3">
+            <div
+              className={`flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium border ${
+                backendStatus === 'connected'
+                  ? 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-950/40 dark:text-emerald-300'
+                  : backendStatus === 'offline'
+                  ? 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900/60 dark:bg-amber-950/40 dark:text-amber-300'
+                  : 'border-zinc-200 bg-zinc-50 text-zinc-600 dark:border-zinc-800 dark:bg-zinc-800 dark:text-zinc-400'
+              }`}
+              title={
+                backendStatus === 'connected'
+                  ? 'FastAPI & PostgreSQL Backend Connected'
+                  : 'Backend API unreachable, using client analysis engine'
+              }
+            >
+              <span
+                className={`h-2 w-2 rounded-full ${
+                  backendStatus === 'connected'
+                    ? 'bg-emerald-500 animate-pulse'
+                    : backendStatus === 'offline'
+                    ? 'bg-amber-500'
+                    : 'bg-zinc-400'
+                }`}
+              />
+              <span className="font-mono text-[11px]">
+                {backendStatus === 'connected'
+                  ? 'API Live'
+                  : backendStatus === 'offline'
+                  ? 'Client Engine'
+                  : 'Connecting...'}
+              </span>
+            </div>
+
             <button
               type="button"
               onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
@@ -317,7 +445,7 @@ export default function App() {
             onInspectFile={handleOpenInspectModal}
             onInspectMetric={handleInspectMetric}
             onNavigateToUpload={() => setCurrentPage('upload')}
-            historyList={mockHistory}
+            historyList={historyList}
           />
         )}
       </main>

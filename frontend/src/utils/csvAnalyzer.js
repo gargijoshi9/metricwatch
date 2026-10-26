@@ -218,12 +218,12 @@ export function analyzeData(rows, headers, sensitivity = 2.0) {
   };
 }
 
-function generateCellExplanation(col, val, baseline, pctChange, zScore) {
+export function generateCellExplanation(col, val, baseline, pctChange, zScore) {
   const dir = pctChange > 0 ? 'spiked' : 'plummeted';
   return `${formatMetricName(col)} ${dir} by ${Math.abs(pctChange).toFixed(1)}% compared to normal baseline (${formatValue(col, baseline)}), registering ${Math.abs(zScore).toFixed(1)}σ deviation.`;
 }
 
-function generateMetricExplanation(col, change, severity) {
+export function generateMetricExplanation(col, change, severity) {
   const m = col.toLowerCase();
   const dir = change > 0 ? 'higher' : 'lower';
   const abs = Math.abs(change).toFixed(1);
@@ -240,7 +240,7 @@ function generateMetricExplanation(col, change, severity) {
   return `Within normal operating bounds (${abs}% ${dir} variation).`;
 }
 
-function generateAISynthesis(results, flaggedRows, latestDate) {
+export function generateAISynthesis(results, flaggedRows, latestDate) {
   const highAnomalies = results.filter((r) => r.severity === 'high');
   const mediumAnomalies = results.filter((r) => r.severity === 'medium');
 

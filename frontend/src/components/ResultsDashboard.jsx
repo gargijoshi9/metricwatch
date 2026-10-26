@@ -42,6 +42,12 @@ export default function ResultsDashboard({
           <div>
             <div className="flex flex-wrap items-center gap-2">
               <h2 className="text-base font-bold text-zinc-900 dark:text-zinc-100">{fileName}</h2>
+              {meta?.persistedInDb && (
+                <span className="inline-flex items-center gap-1 rounded-full bg-blue-100 px-2.5 py-0.5 text-xs font-semibold text-blue-700 dark:bg-blue-950/80 dark:text-blue-300">
+                  <Database className="h-3 w-3" />
+                  PostgreSQL #ID:{meta.backendDatasetId}
+                </span>
+              )}
               {criticalCount > 0 ? (
                 <span className="inline-flex items-center gap-1 rounded-full bg-red-100 px-2.5 py-0.5 text-xs font-semibold text-red-700 dark:bg-red-950/80 dark:text-red-300">
                   <AlertCircle className="h-3 w-3" />
